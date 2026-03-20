@@ -40,11 +40,11 @@ let aim = { x: null, y: null, visible: false };
 let shotCooldown = 0;
 const SHOT_COOLDOWN_MS = 260;
 
-/** Выстрел: сгибание большого пальца, поднятого вверх (угол MCP–IP–TIP, градусы) */
-const THUMB_BENT_ANGLE = 142;
-const THUMB_BENT_RELEASE_ANGLE = 154;
-let thumbBentLatch = false;
-let thumbWasBentShot = false;
+/** Выстрел: опустить большой палец вниз */
+const THUMB_DOWN_ON = 0.02;
+const THUMB_DOWN_OFF = -0.002;
+let thumbDownLatch = false;
+let thumbWasDownShot = false;
 
 /** Сглаживание прицела (уменьшает дрожание MediaPipe) */
 let aimSmoothPlay = /** @type {{ x: number; y: number } | null} */ (null);
@@ -63,46 +63,23 @@ const AIM_CALIB_AY = 0.28;
 const AIM_CALIB_MX = 34;
 const AIM_CALIB_MY = 44;
 
-function angleDegAt(pA, pB, pC) {
-  const ux = pA.x - pB.x;
-  const uy = pA.y - pB.y;
-  const vx = pC.x - pB.x;
-  const vy = pC.y - pB.y;
-  const nu = Math.hypot(ux, uy);
-  const nv = Math.hypot(vx, vy);
-  if (nu < 1e-5 || nv < 1e-5) return 180;
-  const cos = (ux * vx + uy * vy) / (nu * nv);
-  return (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
-}
-
-/** Большой палец «вверх» в кадре: кончик выше костяшки, рука не сжата в кулак */
-function thumbRaisedUp(lm) {
+/** Один кадр жеста «большой палец вниз»; обновляет защёлку */
+function updateThumbShotGesture(lm) {
   const tip = lm[LM.THUMB_TIP];
   const mcp = lm[LM.THUMB_MCP];
   const wrist = lm[LM.WRIST];
-  if (tip.y >= mcp.y - 0.012) return false;
-  if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) < 0.055) return false;
-  return true;
-}
-
-function thumbFoldAngle(lm) {
-  return angleDegAt(lm[LM.THUMB_MCP], lm[LM.THUMB_IP], lm[LM.THUMB_TIP]);
-}
-
-/** Один кадр «щелчка» большим пальцем; обновляет защёлку жеста */
-function updateThumbShotGesture(lm) {
-  const raised = thumbRaisedUp(lm);
-  if (!raised) {
-    thumbBentLatch = false;
-    thumbWasBentShot = false;
+  const yDelta = tip.y - mcp.y;
+  const thumbVisible = Math.hypot(tip.x - wrist.x, tip.y - wrist.y) > 0.05;
+  if (!thumbVisible) {
+    thumbDownLatch = false;
+    thumbWasDownShot = false;
     return false;
   }
-  const ang = thumbFoldAngle(lm);
-  if (ang < THUMB_BENT_ANGLE) thumbBentLatch = true;
-  else if (ang > THUMB_BENT_RELEASE_ANGLE) thumbBentLatch = false;
-  const bent = thumbBentLatch;
-  const fire = bent && !thumbWasBentShot;
-  thumbWasBentShot = bent;
+  if (yDelta > THUMB_DOWN_ON) thumbDownLatch = true;
+  else if (yDelta < THUMB_DOWN_OFF) thumbDownLatch = false;
+  const isDown = thumbDownLatch;
+  const fire = isDown && !thumbWasDownShot;
+  thumbWasDownShot = isDown;
   return fire;
 }
 
@@ -149,7 +126,7 @@ const calibSteps = [
     fx: 0.5,
     fy: 0.5,
     title: "Шаг 1 из 3 — центр",
-    text: "Наведите оранжевый прицел на голубой круг и выстрелите: большой палец вверх и согните его.",
+    text: "Наведите оранжевый прицел на голубой круг и выстрелите: опустите большой палец вниз.",
   },
   {
     fx: 0.5,
@@ -458,13 +435,12 @@ function calibTargetScreen() {
 function finishCalibAndPlay() {
   finalizeCalibration();
   gamePhase = "playing";
-  thumbBentLatch = false;
-  thumbWasBentShot = false;
+  thumbDownLatch = false;
+  thumbWasDownShot = false;
   aimSmoothPlay = null;
   aimMedianBuf.length = 0;
   hideCalib();
-  hintEl.textContent =
-    "Прицел — указательный. Выстрел — согните большой палец (жест «класс»). Пробел — выстрел.";
+  hintEl.textContent = "Прицел — указательный. Выстрел — опустите большой палец вниз. Пробел — выстрел.";
   scoreEl.textContent = String(score);
 }
 
@@ -579,8 +555,8 @@ function processHands() {
   aimRaw.visible = false;
 
   if (!result.landmarks || result.landmarks.length === 0) {
-    thumbBentLatch = false;
-    thumbWasBentShot = false;
+    thumbDownLatch = false;
+    thumbWasDownShot = false;
     aimSmoothPlay = null;
     aimSmoothCalib = null;
     aimMedianBuf.length = 0;
