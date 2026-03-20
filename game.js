@@ -387,8 +387,7 @@ function drawBackground() {
 
 /**
  * Точка прицела: смесь TIP + DIP + PIP.
- * X зеркалим как в селфи. Y: iy растёт вниз по кадру MediaPipe — умножаем на высоту экрана,
- * чтобы «палец выше в кадре» = прицел выше на экране (без (1−iy), иначе вертикаль наоборот).
+ * X/Y в координатах кадра MediaPipe без зеркала по X — иначе прицел уезжает в противоположную сторону.
  */
 function rawIndexPixels(lm) {
   const t = lm[LM.INDEX_TIP];
@@ -400,7 +399,7 @@ function rawIndexPixels(lm) {
   const ix = wT * t.x + wD * d.x + wP * p.x;
   const iy = wT * t.y + wD * d.y + wP * p.y;
   return {
-    x: (1 - ix) * window.innerWidth,
+    x: ix * window.innerWidth,
     y: iy * window.innerHeight,
   };
 }
