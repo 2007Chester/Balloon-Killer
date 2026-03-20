@@ -287,7 +287,11 @@ function drawBackground() {
 function rawIndexPixels(lm) {
   const ix = lm[LM.INDEX_TIP].x;
   const iy = lm[LM.INDEX_TIP].y;
-  return { x: (1 - ix) * window.innerWidth, y: iy * window.innerHeight };
+  // X зеркалим как в селфи; Y инвертируем — у части камер/драйверов картинка «перевёрнута» по вертикали
+  return {
+    x: (1 - ix) * window.innerWidth,
+    y: (1 - iy) * window.innerHeight,
+  };
 }
 
 function applyCalib(raw) {
