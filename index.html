@@ -15,15 +15,22 @@
     <canvas id="game"></canvas>
     <div id="hud">
       <div id="score-wrap"><span id="score">0</span></div>
-      <p id="hint">Сначала калибровка. Прицел — указательный, выстрел — резко поднять палец вверх.</p>
+      <p id="hint">Нажмите «Играть», затем «Калибровать». Прицел — указательный, выстрел — рывок вверх.</p>
       <button type="button" id="start" hidden>Начать</button>
     </div>
     <div id="overlay" class="visible">
       <div class="card">
         <h1>Balloon Killer</h1>
-        <p>Камера распознаёт руку. Перед игрой — калибровка по трём меткам. Прицел — указательный палец (как в селфи). Выстрел — резко поднимите этот палец вверх.</p>
-        <button type="button" id="overlay-start">Включить камеру и играть</button>
+        <p>Камера распознаёт руку. Сначала нажмите «Играть» — включится камера. Затем отдельной кнопкой запустится калибровка по трём меткам. Прицел — указательный (как в селфи). Выстрел — резко поднимите палец вверх.</p>
+        <button type="button" id="overlay-start">Играть</button>
         <p class="small">Нужен Chrome / Edge / Safari и доступ к камере. Локально: откройте файл или запустите простой сервер.</p>
+      </div>
+    </div>
+    <div id="ready-overlay">
+      <div class="card">
+        <h1>Камера готова</h1>
+        <p>Калибровка нужна только перед игрой. Нажмите «Калибровать» и наведите указательный палец на три круга по очереди.</p>
+        <button type="button" id="ready-calibrate">Калибровать</button>
       </div>
     </div>
     <div id="calib-overlay" class="calib-panel" hidden>

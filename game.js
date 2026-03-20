@@ -7,6 +7,8 @@ const scoreEl = document.getElementById("score");
 const hintEl = document.getElementById("hint");
 const overlay = document.getElementById("overlay");
 const overlayStart = document.getElementById("overlay-start");
+const readyOverlay = document.getElementById("ready-overlay");
+const readyCalibrate = document.getElementById("ready-calibrate");
 const calibOverlay = document.getElementById("calib-overlay");
 const calibTitle = document.getElementById("calib-title");
 const calibText = document.getElementById("calib-text");
@@ -21,7 +23,7 @@ const LM = {
   INDEX_TIP: 8,
 };
 
-/** @type {'menu' | 'calib' | 'playing'} */
+/** @type {'menu' | 'ready' | 'calib' | 'playing'} */
 let gamePhase = "menu";
 let handLandmarker = null;
 let lastVideoTime = -1;
@@ -384,6 +386,14 @@ function hideCalib() {
   calibOverlay.hidden = true;
 }
 
+function showReadyScreen() {
+  readyOverlay.classList.add("visible");
+}
+
+function hideReadyScreen() {
+  readyOverlay.classList.remove("visible");
+}
+
 async function initHandLandmarker() {
   const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
   const opts = (delegate) => ({
@@ -514,6 +524,8 @@ function frame(now) {
     if (aimRaw.visible) {
       drawCrosshairAt(aimRaw.x, aimRaw.y, "rgba(255, 190, 100, 0.9)", "rgba(255, 140, 60, 0.25)");
     }
+  } else if (gamePhase === "ready") {
+    drawBackground();
   }
 
   requestAnimationFrame(frame);
@@ -533,9 +545,10 @@ overlayStart.addEventListener("click", async () => {
     await initHandLandmarker();
     await startCamera();
     overlay.classList.remove("visible");
-    gamePhase = "calib";
-    showCalib();
-    hintEl.textContent = "Калибровка: наведите указательный палец на три круга по очереди.";
+    hideCalib();
+    gamePhase = "ready";
+    showReadyScreen();
+    hintEl.textContent = "Нажмите «Калибровать», затем наведите палец на три круга.";
     startLoop();
   } catch (e) {
     console.error(e);
@@ -543,6 +556,14 @@ overlayStart.addEventListener("click", async () => {
       "Не удалось запустить камеру или модель. Проверьте разрешения и HTTPS / localhost.";
     overlayStart.disabled = false;
   }
+});
+
+readyCalibrate.addEventListener("click", () => {
+  if (gamePhase !== "ready") return;
+  hideReadyScreen();
+  gamePhase = "calib";
+  showCalib();
+  hintEl.textContent = "Калибровка: наведите указательный палец на круг и нажмите «Зафиксировать».";
 });
 
 calibCapture.addEventListener("click", () => {

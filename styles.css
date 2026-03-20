@@ -94,6 +94,24 @@ html, body {
   pointer-events: none;
 }
 
+#ready-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(ellipse 80% 60% at 50% 40%, #1a2230 0%, var(--bg) 70%);
+  transition: opacity 0.35s ease, visibility 0.35s ease;
+  z-index: 10;
+}
+
+#ready-overlay:not(.visible) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .card {
   max-width: 420px;
   padding: 28px 32px;
