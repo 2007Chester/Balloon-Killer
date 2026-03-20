@@ -18,9 +18,7 @@ const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 const LM = {
-  THUMB_TIP: 4,
   INDEX_TIP: 8,
-  RING_TIP: 16,
 };
 
 /** @type {'menu' | 'calib' | 'playing'} */
@@ -32,10 +30,14 @@ let score = 0;
 let aimRaw = { x: null, y: null, visible: false };
 let aim = { x: null, y: null, visible: false };
 
-let pinchPrev = false;
 let shotCooldown = 0;
-const PINCH_THRESHOLD = 0.072;
-const SHOT_COOLDOWN_MS = 220;
+const SHOT_COOLDOWN_MS = 260;
+
+/** Резкий «выстрел» — палец/прицел движется вверх по экрану (y уменьшается), пикс/мс */
+const FLICK_V_UP = -1.05;
+let flickLast = /** @type {{ t: number; y: number } | null} */ (null);
+let flickPrevVy = 0;
+let flickWarmup = 0;
 
 /** Масштаб и смещение: экран = raw * s + o */
 let cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
@@ -301,14 +303,6 @@ function applyCalib(raw) {
   };
 }
 
-function thumbRingPinchDist(lm) {
-  const tx = 1 - lm[LM.THUMB_TIP].x;
-  const ty = lm[LM.THUMB_TIP].y;
-  const rx = 1 - lm[LM.RING_TIP].x;
-  const ry = lm[LM.RING_TIP].y;
-  return Math.hypot(tx - rx, ty - ry);
-}
-
 function finalizeCalibration() {
   if (calibSamples.length !== 3) return;
   const [p0, p1, p2] = calibSamples;
@@ -402,7 +396,9 @@ function processHands() {
   aimRaw.visible = false;
 
   if (!result.landmarks || result.landmarks.length === 0) {
-    pinchPrev = false;
+    flickLast = null;
+    flickPrevVy = 0;
+    flickWarmup = 0;
     return;
   }
 
@@ -426,9 +422,22 @@ function processHands() {
     aim.x = Math.max(0, Math.min(w, c.x));
     aim.y = Math.max(0, Math.min(h, c.y));
     aim.visible = true;
-    const pinched = thumbRingPinchDist(lm) < PINCH_THRESHOLD;
-    if (pinched && !pinchPrev) tryShoot();
-    pinchPrev = pinched;
+
+    const now = performance.now();
+    flickWarmup += 1;
+    if (flickLast) {
+      const dt = now - flickLast.t;
+      if (dt >= 6 && dt <= 100) {
+        const vy = (aim.y - flickLast.y) / dt;
+        if (flickWarmup >= 5 && vy < FLICK_V_UP && flickPrevVy > FLICK_V_UP) {
+          tryShoot();
+        }
+        flickPrevVy = vy;
+      } else if (dt > 100) {
+        flickPrevVy = 0;
+      }
+    }
+    flickLast = { t: now, y: aim.y };
   }
 }
 
@@ -520,9 +529,11 @@ calibCapture.addEventListener("click", () => {
   if (calibStep >= calibSteps.length) {
     finalizeCalibration();
     gamePhase = "playing";
-    pinchPrev = false;
+    flickLast = null;
+    flickPrevVy = 0;
+    flickWarmup = 0;
     hideCalib();
-    hintEl.textContent = "Прицел — указательный. Выстрел — большой + безымянный палец. Пробел — выстрел.";
+    hintEl.textContent = "Прицел — указательный. Выстрел — резко поднимите палец вверх. Пробел — выстрел.";
     scoreEl.textContent = String(score);
   } else {
     syncCalibPanel();
