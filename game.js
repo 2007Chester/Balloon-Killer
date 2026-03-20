@@ -50,14 +50,14 @@ let thumbWasBentShot = false;
 let aimSmoothPlay = /** @type {{ x: number; y: number } | null} */ (null);
 let aimSmoothCalib = /** @type {{ x: number; y: number } | null} */ (null);
 /** Медиана по последним кадрам после калибровки — убирает выбросы в стороны */
-const AIM_MEDIAN_LEN = 7;
+const AIM_MEDIAN_LEN = 4;
 /** @type {{ x: number; y: number }[]} */
 let aimMedianBuf = [];
 
-const AIM_PLAY_AX = 0.09;
-const AIM_PLAY_AY = 0.11;
-const AIM_PLAY_MX = 16;
-const AIM_PLAY_MY = 24;
+const AIM_PLAY_AX = 0.22;
+const AIM_PLAY_AY = 0.24;
+const AIM_PLAY_MX = 36;
+const AIM_PLAY_MY = 44;
 const AIM_CALIB_AX = 0.24;
 const AIM_CALIB_AY = 0.28;
 const AIM_CALIB_MX = 34;
@@ -397,9 +397,9 @@ function rawIndexPixels(lm) {
   const t = lm[LM.INDEX_TIP];
   const d = lm[LM.INDEX_DIP];
   const p = lm[LM.INDEX_PIP];
-  const wT = 0.56;
-  const wD = 0.28;
-  const wP = 0.16;
+  const wT = 0.62;
+  const wD = 0.24;
+  const wP = 0.14;
   const ix = wT * t.x + wD * d.x + wP * p.x;
   const iy = wT * t.y + wD * d.y + wP * p.y;
   const ny = AIM_FLIP_Y ? 1 - iy : iy;
