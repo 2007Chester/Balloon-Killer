@@ -386,8 +386,9 @@ function drawBackground() {
 }
 
 /**
- * Точка прицела: смесь TIP + DIP + PIP (кончик даёт направление, суставы стабилизируют трекинг).
- * Затем зеркало X как в селфи и инверсия Y под камеру.
+ * Точка прицела: смесь TIP + DIP + PIP.
+ * X зеркалим как в селфи. Y: iy растёт вниз по кадру MediaPipe — умножаем на высоту экрана,
+ * чтобы «палец выше в кадре» = прицел выше на экране (без (1−iy), иначе вертикаль наоборот).
  */
 function rawIndexPixels(lm) {
   const t = lm[LM.INDEX_TIP];
@@ -400,7 +401,7 @@ function rawIndexPixels(lm) {
   const iy = wT * t.y + wD * d.y + wP * p.y;
   return {
     x: (1 - ix) * window.innerWidth,
-    y: (1 - iy) * window.innerHeight,
+    y: iy * window.innerHeight,
   };
 }
 
