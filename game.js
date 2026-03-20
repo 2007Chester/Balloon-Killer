@@ -24,6 +24,8 @@ const LM = {
   THUMB_MCP: 2,
   THUMB_IP: 3,
   THUMB_TIP: 4,
+  INDEX_PIP: 6,
+  INDEX_DIP: 7,
   INDEX_TIP: 8,
 };
 
@@ -48,10 +50,19 @@ let thumbWasBentShot = false;
 /** Сглаживание прицела (уменьшает дрожание MediaPipe) */
 let aimSmoothPlay = /** @type {{ x: number; y: number } | null} */ (null);
 let aimSmoothCalib = /** @type {{ x: number; y: number } | null} */ (null);
-const AIM_SMOOTH_PLAY_ALPHA = 0.2;
-const AIM_SMOOTH_PLAY_MAXSTEP = 44;
-const AIM_SMOOTH_CALIB_ALPHA = 0.3;
-const AIM_SMOOTH_CALIB_MAXSTEP = 58;
+/** Медиана по последним кадрам после калибровки — убирает выбросы в стороны */
+const AIM_MEDIAN_LEN = 7;
+/** @type {{ x: number; y: number }[]} */
+let aimMedianBuf = [];
+
+const AIM_PLAY_AX = 0.09;
+const AIM_PLAY_AY = 0.11;
+const AIM_PLAY_MX = 16;
+const AIM_PLAY_MY = 24;
+const AIM_CALIB_AX = 0.24;
+const AIM_CALIB_AY = 0.28;
+const AIM_CALIB_MX = 34;
+const AIM_CALIB_MY = 44;
 
 function angleDegAt(pA, pB, pC) {
   const ux = pA.x - pB.x;
@@ -79,21 +90,37 @@ function thumbFoldAngle(lm) {
   return angleDegAt(lm[LM.THUMB_MCP], lm[LM.THUMB_IP], lm[LM.THUMB_TIP]);
 }
 
-function smoothFollow(prev, tx, ty, alpha, maxStep) {
+function smoothFollowAxis(prev, tx, ty, alphaX, alphaY, maxStepX, maxStepY) {
   if (!prev) return { x: tx, y: ty };
   let cx = tx;
   let cy = ty;
   const dx = tx - prev.x;
   const dy = ty - prev.y;
-  const d = Math.hypot(dx, dy);
-  if (d > maxStep && d > 0) {
-    const k = maxStep / d;
-    cx = prev.x + dx * k;
-    cy = prev.y + dy * k;
-  }
+  if (Math.abs(dx) > maxStepX) cx = prev.x + Math.sign(dx) * maxStepX;
+  if (Math.abs(dy) > maxStepY) cy = prev.y + Math.sign(dy) * maxStepY;
   return {
-    x: prev.x + (cx - prev.x) * alpha,
-    y: prev.y + (cy - prev.y) * alpha,
+    x: prev.x + (cx - prev.x) * alphaX,
+    y: prev.y + (cy - prev.y) * alphaY,
+  };
+}
+
+function median1d(values) {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const m = (s.length - 1) >> 1;
+  return s.length % 2 ? s[m] : (s[m] + s[m + 1]) / 2;
+}
+
+function pushAimMedian(p) {
+  aimMedianBuf.push({ x: p.x, y: p.y });
+  while (aimMedianBuf.length > AIM_MEDIAN_LEN) aimMedianBuf.shift();
+}
+
+function medianAimPoint() {
+  if (aimMedianBuf.length === 0) return null;
+  return {
+    x: median1d(aimMedianBuf.map((q) => q.x)),
+    y: median1d(aimMedianBuf.map((q) => q.y)),
   };
 }
 
@@ -344,10 +371,19 @@ function drawBackground() {
   }
 }
 
+/**
+ * Точка прицела: смесь TIP + DIP + PIP (кончик даёт направление, суставы стабилизируют трекинг).
+ * Затем зеркало X как в селфи и инверсия Y под камеру.
+ */
 function rawIndexPixels(lm) {
-  const ix = lm[LM.INDEX_TIP].x;
-  const iy = lm[LM.INDEX_TIP].y;
-  // X зеркалим как в селфи; Y инвертируем — у части камер/драйверов картинка «перевёрнута» по вертикали
+  const t = lm[LM.INDEX_TIP];
+  const d = lm[LM.INDEX_DIP];
+  const p = lm[LM.INDEX_PIP];
+  const wT = 0.56;
+  const wD = 0.28;
+  const wP = 0.16;
+  const ix = wT * t.x + wD * d.x + wP * p.x;
+  const iy = wT * t.y + wD * d.y + wP * p.y;
   return {
     x: (1 - ix) * window.innerWidth,
     y: (1 - iy) * window.innerHeight,
@@ -409,6 +445,7 @@ function showCalib() {
   sampleBuffer = [];
   cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
   aimSmoothCalib = null;
+  aimMedianBuf.length = 0;
   syncCalibPanel();
 }
 
@@ -433,9 +470,9 @@ async function initHandLandmarker() {
     },
     runningMode: "VIDEO",
     numHands: 1,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    minHandDetectionConfidence: 0.55,
+    minHandPresenceConfidence: 0.55,
+    minTrackingConfidence: 0.62,
   });
   try {
     handLandmarker = await HandLandmarker.createFromOptions(vision, opts("GPU"));
@@ -467,6 +504,7 @@ function processHands() {
     thumbWasBentShot = false;
     aimSmoothPlay = null;
     aimSmoothCalib = null;
+    aimMedianBuf.length = 0;
     return;
   }
 
@@ -474,7 +512,15 @@ function processHands() {
   const raw = rawIndexPixels(lm);
 
   if (gamePhase === "calib") {
-    aimSmoothCalib = smoothFollow(aimSmoothCalib, raw.x, raw.y, AIM_SMOOTH_CALIB_ALPHA, AIM_SMOOTH_CALIB_MAXSTEP);
+    aimSmoothCalib = smoothFollowAxis(
+      aimSmoothCalib,
+      raw.x,
+      raw.y,
+      AIM_CALIB_AX,
+      AIM_CALIB_AY,
+      AIM_CALIB_MX,
+      AIM_CALIB_MY,
+    );
     aimRaw.x = aimSmoothCalib.x;
     aimRaw.y = aimSmoothCalib.y;
     aimRaw.visible = true;
@@ -486,10 +532,20 @@ function processHands() {
 
   if (gamePhase === "playing") {
     const c = applyCalib(raw);
+    pushAimMedian(c);
+    const cStable = medianAimPoint() ?? c;
     const w = window.innerWidth;
     const h = window.innerHeight;
 
-    aimSmoothPlay = smoothFollow(aimSmoothPlay, c.x, c.y, AIM_SMOOTH_PLAY_ALPHA, AIM_SMOOTH_PLAY_MAXSTEP);
+    aimSmoothPlay = smoothFollowAxis(
+      aimSmoothPlay,
+      cStable.x,
+      cStable.y,
+      AIM_PLAY_AX,
+      AIM_PLAY_AY,
+      AIM_PLAY_MX,
+      AIM_PLAY_MY,
+    );
     aim.x = Math.max(0, Math.min(w, aimSmoothPlay.x));
     aim.y = Math.max(0, Math.min(h, aimSmoothPlay.y));
     aim.visible = true;
@@ -611,6 +667,7 @@ calibCapture.addEventListener("click", () => {
     thumbBentLatch = false;
     thumbWasBentShot = false;
     aimSmoothPlay = null;
+    aimMedianBuf.length = 0;
     hideCalib();
     hintEl.textContent =
       "Прицел — указательный. Выстрел — согните большой палец (жест «класс»). Пробел — выстрел.";
