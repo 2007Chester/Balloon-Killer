@@ -12,7 +12,6 @@ const readyCalibrate = document.getElementById("ready-calibrate");
 const calibOverlay = document.getElementById("calib-overlay");
 const calibTitle = document.getElementById("calib-title");
 const calibText = document.getElementById("calib-text");
-const calibCapture = document.getElementById("calib-capture");
 const calibProgress = document.getElementById("calib-progress");
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
@@ -90,6 +89,23 @@ function thumbFoldAngle(lm) {
   return angleDegAt(lm[LM.THUMB_MCP], lm[LM.THUMB_IP], lm[LM.THUMB_TIP]);
 }
 
+/** Один кадр «щелчка» большим пальцем; обновляет защёлку жеста */
+function updateThumbShotGesture(lm) {
+  const raised = thumbRaisedUp(lm);
+  if (!raised) {
+    thumbBentLatch = false;
+    thumbWasBentShot = false;
+    return false;
+  }
+  const ang = thumbFoldAngle(lm);
+  if (ang < THUMB_BENT_ANGLE) thumbBentLatch = true;
+  else if (ang > THUMB_BENT_RELEASE_ANGLE) thumbBentLatch = false;
+  const bent = thumbBentLatch;
+  const fire = bent && !thumbWasBentShot;
+  thumbWasBentShot = bent;
+  return fire;
+}
+
 function smoothFollowAxis(prev, tx, ty, alphaX, alphaY, maxStepX, maxStepY) {
   if (!prev) return { x: tx, y: ty };
   let cx = tx;
@@ -133,27 +149,25 @@ const calibSteps = [
     fx: 0.5,
     fy: 0.5,
     title: "Шаг 1 из 3 — центр",
-    text: "Наведите кончик указательного пальца на яркий круг в центре экрана. Когда совпадёт — нажмите «Зафиксировать».",
+    text: "Наведите оранжевый прицел на голубой круг и выстрелите: большой палец вверх и согните его.",
   },
   {
     fx: 0.5,
     fy: 0.82,
     title: "Шаг 2 из 3 — низ",
-    text: "То же самое с кругом внизу по центру.",
+    text: "То же самое с нижним кругом.",
   },
   {
     fx: 0.88,
     fy: 0.5,
     title: "Шаг 3 из 3 — справа",
-    text: "Наведите палец на круг справа по центру и зафиксируйте.",
+    text: "То же самое с правым кругом.",
   },
 ];
+/** Радиус попадания прицела в метку (пиксели), круг на экране ~40px */
+const CALIB_HIT_R = 54;
 /** @type {{ screen: { x: number; y: number }; raw: { x: number; y: number } }[]} */
 let calibSamples = [];
-/** @type {{ x: number; y: number }[]} */
-let sampleBuffer = [];
-const CALIB_BUFFER_MAX = 45;
-const CALIB_MIN_FRAMES = 12;
 
 const balloons = [];
 let spawnAcc = 0;
@@ -418,31 +432,88 @@ function finalizeCalibration() {
   cal = { sx, sy, ox, oy };
 }
 
-function averageBuffer(buf) {
-  if (buf.length === 0) return null;
-  let sx = 0;
-  let sy = 0;
-  for (const p of buf) {
-    sx += p.x;
-    sy += p.y;
-  }
-  const n = buf.length;
-  return { x: sx / n, y: sy / n };
-}
-
 function syncCalibPanel() {
   const step = calibSteps[calibStep];
   if (!step) return;
   calibTitle.textContent = step.title;
   calibText.textContent = step.text;
-  calibProgress.textContent = `Кадров в буфере: ${sampleBuffer.length} (нужно ≥${CALIB_MIN_FRAMES})`;
+  calibProgress.textContent = "Пробел — выстрел с клавиатуры, если прицел на круге.";
+}
+
+function calibTargetScreen() {
+  const step = calibSteps[calibStep];
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return { x: step.fx * w, y: step.fy * h };
+}
+
+function finishCalibAndPlay() {
+  finalizeCalibration();
+  gamePhase = "playing";
+  thumbBentLatch = false;
+  thumbWasBentShot = false;
+  aimSmoothPlay = null;
+  aimMedianBuf.length = 0;
+  hideCalib();
+  hintEl.textContent =
+    "Прицел — указательный. Выстрел — согните большой палец (жест «класс»). Пробел — выстрел.";
+  scoreEl.textContent = String(score);
+}
+
+function captureCalibSample() {
+  if (gamePhase !== "calib" || !aimRaw.visible) return;
+  if (shotCooldown > 0) return;
+  const { x: tcx, y: tcy } = calibTargetScreen();
+  if (dist(aimRaw.x, aimRaw.y, tcx, tcy) > CALIB_HIT_R) return;
+
+  shotCooldown = 320;
+  const step = calibSteps[calibStep];
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const screen = { x: step.fx * w, y: step.fy * h };
+  const raw = { x: aimSmoothCalib.x, y: aimSmoothCalib.y };
+  calibSamples.push({ screen, raw });
+  addShotFx(aimRaw.x, aimRaw.y);
+  spawnParticles(screen.x, screen.y, "#7cf5ff");
+
+  calibStep += 1;
+  if (calibStep >= calibSteps.length) {
+    finishCalibAndPlay();
+  } else {
+    syncCalibPanel();
+    calibProgress.textContent = "Попадание! Следующая метка — снова наведите и выстрелите.";
+  }
+}
+
+function tryCalibShootOrMiss() {
+  if (gamePhase !== "calib" || !aimRaw.visible) return;
+  const { x: tcx, y: tcy } = calibTargetScreen();
+  if (dist(aimRaw.x, aimRaw.y, tcx, tcy) <= CALIB_HIT_R) {
+    captureCalibSample();
+  } else {
+    if (shotCooldown <= 0) {
+      shotCooldown = 200;
+      addShotFx(aimRaw.x, aimRaw.y);
+    }
+    calibProgress.textContent = "Мимо — наведите прицел на голубой круг и выстрельте ещё раз.";
+  }
+}
+
+function tryCalibSpaceCapture() {
+  if (gamePhase !== "calib" || !aimRaw.visible || shotCooldown > 0) return;
+  const { x: tcx, y: tcy } = calibTargetScreen();
+  if (dist(aimRaw.x, aimRaw.y, tcx, tcy) <= CALIB_HIT_R) captureCalibSample();
+  else {
+    shotCooldown = 180;
+    addShotFx(aimRaw.x, aimRaw.y);
+    calibProgress.textContent = "Сначала наведите прицел на круг.";
+  }
 }
 
 function showCalib() {
   calibOverlay.hidden = false;
   calibStep = 0;
   calibSamples = [];
-  sampleBuffer = [];
   cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
   aimSmoothCalib = null;
   aimMedianBuf.length = 0;
@@ -524,9 +595,11 @@ function processHands() {
     aimRaw.x = aimSmoothCalib.x;
     aimRaw.y = aimSmoothCalib.y;
     aimRaw.visible = true;
-    sampleBuffer.push({ x: aimSmoothCalib.x, y: aimSmoothCalib.y });
-    if (sampleBuffer.length > CALIB_BUFFER_MAX) sampleBuffer.shift();
-    calibProgress.textContent = `Кадров в буфере: ${sampleBuffer.length} (нужно ≥${CALIB_MIN_FRAMES})`;
+    aim.x = aimRaw.x;
+    aim.y = aimRaw.y;
+    aim.visible = true;
+
+    if (updateThumbShotGesture(lm)) tryCalibShootOrMiss();
     return;
   }
 
@@ -550,18 +623,7 @@ function processHands() {
     aim.y = Math.max(0, Math.min(h, aimSmoothPlay.y));
     aim.visible = true;
 
-    const raised = thumbRaisedUp(lm);
-    if (!raised) {
-      thumbBentLatch = false;
-      thumbWasBentShot = false;
-    } else {
-      const ang = thumbFoldAngle(lm);
-      if (ang < THUMB_BENT_ANGLE) thumbBentLatch = true;
-      else if (ang > THUMB_BENT_RELEASE_ANGLE) thumbBentLatch = false;
-      const bent = thumbBentLatch;
-      if (bent && !thumbWasBentShot) tryShoot();
-      thumbWasBentShot = bent;
-    }
+    if (updateThumbShotGesture(lm)) tryShoot();
   }
 }
 
@@ -603,6 +665,8 @@ function frame(now) {
     drawCrosshair();
   } else if (gamePhase === "calib") {
     drawCalibTarget();
+    drawShotFx();
+    drawParticles();
     if (aimRaw.visible) {
       drawCrosshairAt(aimRaw.x, aimRaw.y, "rgba(255, 190, 100, 0.9)", "rgba(255, 140, 60, 0.25)");
     }
@@ -630,7 +694,7 @@ overlayStart.addEventListener("click", async () => {
     hideCalib();
     gamePhase = "ready";
     showReadyScreen();
-    hintEl.textContent = "Нажмите «Калибровать», затем наведите палец на три круга.";
+    hintEl.textContent = "Нажмите «Калибровать», затем три раза: прицел на круг — выстрел жестом.";
     startLoop();
   } catch (e) {
     console.error(e);
@@ -645,41 +709,16 @@ readyCalibrate.addEventListener("click", () => {
   hideReadyScreen();
   gamePhase = "calib";
   showCalib();
-  hintEl.textContent = "Калибровка: наведите указательный палец на круг и нажмите «Зафиксировать».";
-});
-
-calibCapture.addEventListener("click", () => {
-  if (gamePhase !== "calib") return;
-  if (sampleBuffer.length < CALIB_MIN_FRAMES) {
-    calibProgress.textContent = `Мало кадров (${sampleBuffer.length}). Держите руку в кадре и наведите палец на круг.`;
-    return;
-  }
-  const avg = averageBuffer(sampleBuffer);
-  if (!avg) return;
-  const step = calibSteps[calibStep];
-  const screen = { x: step.fx * window.innerWidth, y: step.fy * window.innerHeight };
-  calibSamples.push({ screen, raw: { x: avg.x, y: avg.y } });
-  sampleBuffer = [];
-  calibStep += 1;
-  if (calibStep >= calibSteps.length) {
-    finalizeCalibration();
-    gamePhase = "playing";
-    thumbBentLatch = false;
-    thumbWasBentShot = false;
-    aimSmoothPlay = null;
-    aimMedianBuf.length = 0;
-    hideCalib();
-    hintEl.textContent =
-      "Прицел — указательный. Выстрел — согните большой палец (жест «класс»). Пробел — выстрел.";
-    scoreEl.textContent = String(score);
-  } else {
-    syncCalibPanel();
-  }
+  hintEl.textContent = "Калибровка: наведите прицел на круг и выстрелите большим пальцем (или пробел на круге).";
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && gamePhase === "playing" && aim.visible) {
+  if (e.code !== "Space") return;
+  if (gamePhase === "playing" && aim.visible) {
     e.preventDefault();
     tryShoot();
+  } else if (gamePhase === "calib") {
+    e.preventDefault();
+    tryCalibSpaceCapture();
   }
 });
