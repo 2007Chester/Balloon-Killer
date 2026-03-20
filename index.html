@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Balloon Killer — палец-пушка</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <video id="webcam" playsinline autoplay muted></video>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div id="score-wrap"><span id="score">0</span></div>
+      <p id="hint">Разрешите камеру. Наводите указательным пальцем, щипок большим и указательным — выстрел.</p>
+      <button type="button" id="start" hidden>Начать</button>
+    </div>
+    <div id="overlay" class="visible">
+      <div class="card">
+        <h1>Balloon Killer</h1>
+        <p>Камера распознаёт руку. Курсор — кончик указательного пальца (картинка зеркальная, как в селфи). Щипок — выстрел по шарику под прицелом.</p>
+        <button type="button" id="overlay-start">Включить камеру и играть</button>
+        <p class="small">Нужен Chrome / Edge / Safari и доступ к камере. Локально: откройте файл или запустите простой сервер.</p>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
