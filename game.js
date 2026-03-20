@@ -20,6 +20,10 @@ const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 const LM = {
+  WRIST: 0,
+  THUMB_MCP: 2,
+  THUMB_IP: 3,
+  THUMB_TIP: 4,
   INDEX_TIP: 8,
 };
 
@@ -35,11 +39,11 @@ let aim = { x: null, y: null, visible: false };
 let shotCooldown = 0;
 const SHOT_COOLDOWN_MS = 260;
 
-/** Резкий «выстрел» — палец/прицел движется вверх по экрану (y уменьшается), пикс/мс */
-const FLICK_V_UP = -1.05;
-let flickLast = /** @type {{ t: number; y: number } | null} */ (null);
-let flickPrevVy = 0;
-let flickWarmup = 0;
+/** Выстрел: сгибание большого пальца, поднятого вверх (угол MCP–IP–TIP, градусы) */
+const THUMB_BENT_ANGLE = 142;
+const THUMB_BENT_RELEASE_ANGLE = 154;
+let thumbBentLatch = false;
+let thumbWasBentShot = false;
 
 /** Сглаживание прицела (уменьшает дрожание MediaPipe) */
 let aimSmoothPlay = /** @type {{ x: number; y: number } | null} */ (null);
@@ -48,6 +52,32 @@ const AIM_SMOOTH_PLAY_ALPHA = 0.2;
 const AIM_SMOOTH_PLAY_MAXSTEP = 44;
 const AIM_SMOOTH_CALIB_ALPHA = 0.3;
 const AIM_SMOOTH_CALIB_MAXSTEP = 58;
+
+function angleDegAt(pA, pB, pC) {
+  const ux = pA.x - pB.x;
+  const uy = pA.y - pB.y;
+  const vx = pC.x - pB.x;
+  const vy = pC.y - pB.y;
+  const nu = Math.hypot(ux, uy);
+  const nv = Math.hypot(vx, vy);
+  if (nu < 1e-5 || nv < 1e-5) return 180;
+  const cos = (ux * vx + uy * vy) / (nu * nv);
+  return (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
+}
+
+/** Большой палец «вверх» в кадре: кончик выше костяшки, рука не сжата в кулак */
+function thumbRaisedUp(lm) {
+  const tip = lm[LM.THUMB_TIP];
+  const mcp = lm[LM.THUMB_MCP];
+  const wrist = lm[LM.WRIST];
+  if (tip.y >= mcp.y - 0.012) return false;
+  if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) < 0.055) return false;
+  return true;
+}
+
+function thumbFoldAngle(lm) {
+  return angleDegAt(lm[LM.THUMB_MCP], lm[LM.THUMB_IP], lm[LM.THUMB_TIP]);
+}
 
 function smoothFollow(prev, tx, ty, alpha, maxStep) {
   if (!prev) return { x: tx, y: ty };
@@ -433,9 +463,8 @@ function processHands() {
   aimRaw.visible = false;
 
   if (!result.landmarks || result.landmarks.length === 0) {
-    flickLast = null;
-    flickPrevVy = 0;
-    flickWarmup = 0;
+    thumbBentLatch = false;
+    thumbWasBentShot = false;
     aimSmoothPlay = null;
     aimSmoothCalib = null;
     return;
@@ -465,21 +494,18 @@ function processHands() {
     aim.y = Math.max(0, Math.min(h, aimSmoothPlay.y));
     aim.visible = true;
 
-    const now = performance.now();
-    flickWarmup += 1;
-    if (flickLast) {
-      const dt = now - flickLast.t;
-      if (dt >= 6 && dt <= 100) {
-        const vy = (c.y - flickLast.y) / dt;
-        if (flickWarmup >= 5 && vy < FLICK_V_UP && flickPrevVy > FLICK_V_UP) {
-          tryShoot();
-        }
-        flickPrevVy = vy;
-      } else if (dt > 100) {
-        flickPrevVy = 0;
-      }
+    const raised = thumbRaisedUp(lm);
+    if (!raised) {
+      thumbBentLatch = false;
+      thumbWasBentShot = false;
+    } else {
+      const ang = thumbFoldAngle(lm);
+      if (ang < THUMB_BENT_ANGLE) thumbBentLatch = true;
+      else if (ang > THUMB_BENT_RELEASE_ANGLE) thumbBentLatch = false;
+      const bent = thumbBentLatch;
+      if (bent && !thumbWasBentShot) tryShoot();
+      thumbWasBentShot = bent;
     }
-    flickLast = { t: now, y: c.y };
   }
 }
 
@@ -582,12 +608,12 @@ calibCapture.addEventListener("click", () => {
   if (calibStep >= calibSteps.length) {
     finalizeCalibration();
     gamePhase = "playing";
-    flickLast = null;
-    flickPrevVy = 0;
-    flickWarmup = 0;
+    thumbBentLatch = false;
+    thumbWasBentShot = false;
     aimSmoothPlay = null;
     hideCalib();
-    hintEl.textContent = "Прицел — указательный. Выстрел — резко поднимите палец вверх. Пробел — выстрел.";
+    hintEl.textContent =
+      "Прицел — указательный. Выстрел — согните большой палец (жест «класс»). Пробел — выстрел.";
     scoreEl.textContent = String(score);
   } else {
     syncCalibPanel();
