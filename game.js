@@ -39,6 +39,32 @@ let flickLast = /** @type {{ t: number; y: number } | null} */ (null);
 let flickPrevVy = 0;
 let flickWarmup = 0;
 
+/** Сглаживание прицела (уменьшает дрожание MediaPipe) */
+let aimSmoothPlay = /** @type {{ x: number; y: number } | null} */ (null);
+let aimSmoothCalib = /** @type {{ x: number; y: number } | null} */ (null);
+const AIM_SMOOTH_PLAY_ALPHA = 0.2;
+const AIM_SMOOTH_PLAY_MAXSTEP = 44;
+const AIM_SMOOTH_CALIB_ALPHA = 0.3;
+const AIM_SMOOTH_CALIB_MAXSTEP = 58;
+
+function smoothFollow(prev, tx, ty, alpha, maxStep) {
+  if (!prev) return { x: tx, y: ty };
+  let cx = tx;
+  let cy = ty;
+  const dx = tx - prev.x;
+  const dy = ty - prev.y;
+  const d = Math.hypot(dx, dy);
+  if (d > maxStep && d > 0) {
+    const k = maxStep / d;
+    cx = prev.x + dx * k;
+    cy = prev.y + dy * k;
+  }
+  return {
+    x: prev.x + (cx - prev.x) * alpha,
+    y: prev.y + (cy - prev.y) * alpha,
+  };
+}
+
 /** Масштаб и смещение: экран = raw * s + o */
 let cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
 
@@ -350,6 +376,7 @@ function showCalib() {
   calibSamples = [];
   sampleBuffer = [];
   cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
+  aimSmoothCalib = null;
   syncCalibPanel();
 }
 
@@ -399,17 +426,20 @@ function processHands() {
     flickLast = null;
     flickPrevVy = 0;
     flickWarmup = 0;
+    aimSmoothPlay = null;
+    aimSmoothCalib = null;
     return;
   }
 
   const lm = result.landmarks[0];
   const raw = rawIndexPixels(lm);
-  aimRaw.x = raw.x;
-  aimRaw.y = raw.y;
-  aimRaw.visible = true;
 
   if (gamePhase === "calib") {
-    sampleBuffer.push({ x: raw.x, y: raw.y });
+    aimSmoothCalib = smoothFollow(aimSmoothCalib, raw.x, raw.y, AIM_SMOOTH_CALIB_ALPHA, AIM_SMOOTH_CALIB_MAXSTEP);
+    aimRaw.x = aimSmoothCalib.x;
+    aimRaw.y = aimSmoothCalib.y;
+    aimRaw.visible = true;
+    sampleBuffer.push({ x: aimSmoothCalib.x, y: aimSmoothCalib.y });
     if (sampleBuffer.length > CALIB_BUFFER_MAX) sampleBuffer.shift();
     calibProgress.textContent = `Кадров в буфере: ${sampleBuffer.length} (нужно ≥${CALIB_MIN_FRAMES})`;
     return;
@@ -419,8 +449,10 @@ function processHands() {
     const c = applyCalib(raw);
     const w = window.innerWidth;
     const h = window.innerHeight;
-    aim.x = Math.max(0, Math.min(w, c.x));
-    aim.y = Math.max(0, Math.min(h, c.y));
+
+    aimSmoothPlay = smoothFollow(aimSmoothPlay, c.x, c.y, AIM_SMOOTH_PLAY_ALPHA, AIM_SMOOTH_PLAY_MAXSTEP);
+    aim.x = Math.max(0, Math.min(w, aimSmoothPlay.x));
+    aim.y = Math.max(0, Math.min(h, aimSmoothPlay.y));
     aim.visible = true;
 
     const now = performance.now();
@@ -428,7 +460,7 @@ function processHands() {
     if (flickLast) {
       const dt = now - flickLast.t;
       if (dt >= 6 && dt <= 100) {
-        const vy = (aim.y - flickLast.y) / dt;
+        const vy = (c.y - flickLast.y) / dt;
         if (flickWarmup >= 5 && vy < FLICK_V_UP && flickPrevVy > FLICK_V_UP) {
           tryShoot();
         }
@@ -437,7 +469,7 @@ function processHands() {
         flickPrevVy = 0;
       }
     }
-    flickLast = { t: now, y: aim.y };
+    flickLast = { t: now, y: c.y };
   }
 }
 
@@ -532,6 +564,7 @@ calibCapture.addEventListener("click", () => {
     flickLast = null;
     flickPrevVy = 0;
     flickWarmup = 0;
+    aimSmoothPlay = null;
     hideCalib();
     hintEl.textContent = "Прицел — указательный. Выстрел — резко поднимите палец вверх. Пробел — выстрел.";
     scoreEl.textContent = String(score);
