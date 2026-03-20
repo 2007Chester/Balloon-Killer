@@ -15,15 +15,23 @@
     <canvas id="game"></canvas>
     <div id="hud">
       <div id="score-wrap"><span id="score">0</span></div>
-      <p id="hint">Разрешите камеру. Наводите указательным пальцем, щипок большим и указательным — выстрел.</p>
+      <p id="hint">Сначала калибровка, затем игра. Прицел — указательный, выстрел — щипок большим и безымянным.</p>
       <button type="button" id="start" hidden>Начать</button>
     </div>
     <div id="overlay" class="visible">
       <div class="card">
         <h1>Balloon Killer</h1>
-        <p>Камера распознаёт руку. Курсор — кончик указательного пальца (картинка зеркальная, как в селфи). Щипок — выстрел по шарику под прицелом.</p>
+        <p>Камера распознаёт руку. Перед игрой — короткая калибровка по трём меткам. Прицел — указательный палец (как в селфи). Выстрел — соедините большой и безымянный палец.</p>
         <button type="button" id="overlay-start">Включить камеру и играть</button>
         <p class="small">Нужен Chrome / Edge / Safari и доступ к камере. Локально: откройте файл или запустите простой сервер.</p>
+      </div>
+    </div>
+    <div id="calib-overlay" class="calib-panel" hidden>
+      <div class="card calib-card">
+        <h2 id="calib-title">Калибровка прицела</h2>
+        <p id="calib-text"></p>
+        <button type="button" id="calib-capture">Зафиксировать</button>
+        <p class="small" id="calib-progress"></p>
       </div>
     </div>
   </div>

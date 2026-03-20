@@ -7,6 +7,11 @@ const scoreEl = document.getElementById("score");
 const hintEl = document.getElementById("hint");
 const overlay = document.getElementById("overlay");
 const overlayStart = document.getElementById("overlay-start");
+const calibOverlay = document.getElementById("calib-overlay");
+const calibTitle = document.getElementById("calib-title");
+const calibText = document.getElementById("calib-text");
+const calibCapture = document.getElementById("calib-capture");
+const calibProgress = document.getElementById("calib-progress");
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const MODEL_URL =
@@ -15,22 +20,64 @@ const MODEL_URL =
 const LM = {
   THUMB_TIP: 4,
   INDEX_TIP: 8,
+  RING_TIP: 16,
 };
 
+/** @type {'menu' | 'calib' | 'playing'} */
+let gamePhase = "menu";
 let handLandmarker = null;
 let lastVideoTime = -1;
 let score = 0;
+
+let aimRaw = { x: null, y: null, visible: false };
 let aim = { x: null, y: null, visible: false };
+
 let pinchPrev = false;
 let shotCooldown = 0;
-const PINCH_THRESHOLD = 0.055;
+const PINCH_THRESHOLD = 0.072;
 const SHOT_COOLDOWN_MS = 220;
+
+/** Масштаб и смещение: экран = raw * s + o */
+let cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
+
+let calibStep = 0;
+const calibSteps = [
+  {
+    fx: 0.5,
+    fy: 0.5,
+    title: "Шаг 1 из 3 — центр",
+    text: "Наведите кончик указательного пальца на яркий круг в центре экрана. Когда совпадёт — нажмите «Зафиксировать».",
+  },
+  {
+    fx: 0.5,
+    fy: 0.82,
+    title: "Шаг 2 из 3 — низ",
+    text: "То же самое с кругом внизу по центру.",
+  },
+  {
+    fx: 0.88,
+    fy: 0.5,
+    title: "Шаг 3 из 3 — справа",
+    text: "Наведите палец на круг справа по центру и зафиксируйте.",
+  },
+];
+/** @type {{ screen: { x: number; y: number }; raw: { x: number; y: number } }[]} */
+let calibSamples = [];
+/** @type {{ x: number; y: number }[]} */
+let sampleBuffer = [];
+const CALIB_BUFFER_MAX = 45;
+const CALIB_MIN_FRAMES = 12;
 
 const balloons = [];
 let spawnAcc = 0;
 const SPAWN_INTERVAL_MS = 900;
 
 const palette = ["#ff4d6d", "#7cf5ff", "#c4ff4d", "#b388ff", "#ffb84d", "#4dff9e"];
+
+const shotFx = [];
+const SHOT_FX_MS = 200;
+
+const particles = [];
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -70,9 +117,40 @@ function dist(ax, ay, bx, by) {
   return Math.hypot(dx, dy);
 }
 
+function addShotFx(x, y) {
+  shotFx.push({ x, y, t: 0 });
+}
+
+function updateShotFx(dt) {
+  for (let i = shotFx.length - 1; i >= 0; i--) {
+    const s = shotFx[i];
+    s.t += dt;
+    if (s.t >= SHOT_FX_MS) shotFx.splice(i, 1);
+  }
+}
+
+function drawShotFx() {
+  for (const s of shotFx) {
+    const k = s.t / SHOT_FX_MS;
+    const alpha = (1 - k) * 0.95;
+    const r = 8 + k * 120;
+    ctx.strokeStyle = `rgba(255, 230, 120, ${alpha})`;
+    ctx.lineWidth = 3 * (1 - k * 0.5);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(124, 245, 255, ${alpha * 0.6})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r * 0.45, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
 function tryShoot() {
   if (shotCooldown > 0 || aim.x == null || !aim.visible) return;
   shotCooldown = SHOT_COOLDOWN_MS;
+  addShotFx(aim.x, aim.y);
   for (let i = balloons.length - 1; i >= 0; i--) {
     const b = balloons[i];
     if (dist(aim.x, aim.y, b.x, b.y) < b.r + 14) {
@@ -84,8 +162,6 @@ function tryShoot() {
     }
   }
 }
-
-const particles = [];
 
 function spawnParticles(x, y, color) {
   const n = 12;
@@ -144,10 +220,8 @@ function drawBalloon(b) {
   ctx.stroke();
 }
 
-function drawCrosshair() {
-  if (aim.x == null || !aim.visible) return;
-  const { x, y } = aim;
-  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+function drawCrosshairAt(x, y, stroke, fill) {
+  ctx.strokeStyle = stroke;
   ctx.lineWidth = 2;
   const s = 14;
   ctx.beginPath();
@@ -160,10 +234,40 @@ function drawCrosshair() {
   ctx.moveTo(x, y + 4);
   ctx.lineTo(x, y + s);
   ctx.stroke();
-  ctx.fillStyle = "rgba(124,245,255,0.35)";
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawCrosshair() {
+  if (aim.x == null || !aim.visible) return;
+  drawCrosshairAt(aim.x, aim.y, "rgba(255,255,255,0.85)", "rgba(124,245,255,0.35)");
+}
+
+function drawCalibTarget() {
+  const step = calibSteps[calibStep];
+  if (!step) return;
+  const cx = step.fx * window.innerWidth;
+  const cy = step.fy * window.innerHeight;
+  const pulse = 0.85 + Math.sin(performance.now() * 0.006) * 0.15;
+  const R = 40 * pulse;
+  ctx.strokeStyle = "rgba(124, 245, 255, 0.95)";
+  ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(124, 245, 255, 0.12)";
+  ctx.beginPath();
+  ctx.arc(cx, cy, R - 6, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 function drawBackground() {
@@ -178,6 +282,81 @@ function drawBackground() {
     const sy = ((i * 631 + performance.now() * 0.02) % window.innerHeight) | 0;
     ctx.fillRect(sx, sy, 2, 2);
   }
+}
+
+function rawIndexPixels(lm) {
+  const ix = lm[LM.INDEX_TIP].x;
+  const iy = lm[LM.INDEX_TIP].y;
+  return { x: (1 - ix) * window.innerWidth, y: iy * window.innerHeight };
+}
+
+function applyCalib(raw) {
+  return {
+    x: raw.x * cal.sx + cal.ox,
+    y: raw.y * cal.sy + cal.oy,
+  };
+}
+
+function thumbRingPinchDist(lm) {
+  const tx = 1 - lm[LM.THUMB_TIP].x;
+  const ty = lm[LM.THUMB_TIP].y;
+  const rx = 1 - lm[LM.RING_TIP].x;
+  const ry = lm[LM.RING_TIP].y;
+  return Math.hypot(tx - rx, ty - ry);
+}
+
+function finalizeCalibration() {
+  if (calibSamples.length !== 3) return;
+  const [p0, p1, p2] = calibSamples;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  let sx = (p2.screen.x - p0.screen.x) / (p2.raw.x - p0.raw.x);
+  if (!Number.isFinite(sx) || Math.abs(p2.raw.x - p0.raw.x) < w * 0.03) {
+    sx = 1;
+  }
+  const ox = p0.screen.x - p0.raw.x * sx;
+
+  let sy = (p1.screen.y - p0.screen.y) / (p1.raw.y - p0.raw.y);
+  if (!Number.isFinite(sy) || Math.abs(p1.raw.y - p0.raw.y) < h * 0.03) {
+    sy = 1;
+  }
+  const oy = p0.screen.y - p0.raw.y * sy;
+
+  cal = { sx, sy, ox, oy };
+}
+
+function averageBuffer(buf) {
+  if (buf.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  for (const p of buf) {
+    sx += p.x;
+    sy += p.y;
+  }
+  const n = buf.length;
+  return { x: sx / n, y: sy / n };
+}
+
+function syncCalibPanel() {
+  const step = calibSteps[calibStep];
+  if (!step) return;
+  calibTitle.textContent = step.title;
+  calibText.textContent = step.text;
+  calibProgress.textContent = `Кадров в буфере: ${sampleBuffer.length} (нужно ≥${CALIB_MIN_FRAMES})`;
+}
+
+function showCalib() {
+  calibOverlay.hidden = false;
+  calibStep = 0;
+  calibSamples = [];
+  sampleBuffer = [];
+  cal = { sx: 1, sy: 1, ox: 0, oy: 0 };
+  syncCalibPanel();
+}
+
+function hideCalib() {
+  calibOverlay.hidden = true;
 }
 
 async function initHandLandmarker() {
@@ -209,40 +388,48 @@ async function startCamera() {
   await video.play();
 }
 
-function mapHandToScreen(lm) {
-  const ix = lm[LM.INDEX_TIP].x;
-  const iy = lm[LM.INDEX_TIP].y;
-  const tx = lm[LM.THUMB_TIP].x;
-  const ty = lm[LM.THUMB_TIP].y;
-  const mirroredX = 1 - ix;
-  const mirroredTx = 1 - tx;
-  return {
-    ax: mirroredX * window.innerWidth,
-    ay: iy * window.innerHeight,
-    pinchDist: Math.hypot(mirroredX - mirroredTx, iy - ty),
-  };
-}
-
 function processHands() {
   if (!handLandmarker || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   const result = handLandmarker.detectForVideo(video, performance.now());
+
   aim.visible = false;
-  if (result.landmarks && result.landmarks.length > 0) {
-    const { ax, ay, pinchDist } = mapHandToScreen(result.landmarks[0]);
-    aim.x = ax;
-    aim.y = ay;
+  aimRaw.visible = false;
+
+  if (!result.landmarks || result.landmarks.length === 0) {
+    pinchPrev = false;
+    return;
+  }
+
+  const lm = result.landmarks[0];
+  const raw = rawIndexPixels(lm);
+  aimRaw.x = raw.x;
+  aimRaw.y = raw.y;
+  aimRaw.visible = true;
+
+  if (gamePhase === "calib") {
+    sampleBuffer.push({ x: raw.x, y: raw.y });
+    if (sampleBuffer.length > CALIB_BUFFER_MAX) sampleBuffer.shift();
+    calibProgress.textContent = `Кадров в буфере: ${sampleBuffer.length} (нужно ≥${CALIB_MIN_FRAMES})`;
+    return;
+  }
+
+  if (gamePhase === "playing") {
+    const c = applyCalib(raw);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    aim.x = Math.max(0, Math.min(w, c.x));
+    aim.y = Math.max(0, Math.min(h, c.y));
     aim.visible = true;
-    const pinched = pinchDist < PINCH_THRESHOLD;
+    const pinched = thumbRingPinchDist(lm) < PINCH_THRESHOLD;
     if (pinched && !pinchPrev) tryShoot();
     pinchPrev = pinched;
-  } else {
-    pinchPrev = false;
   }
 }
 
 let lastT = performance.now();
+let rafStarted = false;
 
 function frame(now) {
   const dt = now - lastT;
@@ -250,51 +437,96 @@ function frame(now) {
   if (shotCooldown > 0) shotCooldown = Math.max(0, shotCooldown - dt);
 
   processHands();
+  updateShotFx(dt);
 
-  spawnAcc += dt;
-  while (spawnAcc >= SPAWN_INTERVAL_MS) {
-    spawnAcc -= SPAWN_INTERVAL_MS;
-    spawnBalloon();
-  }
-
-  for (const b of balloons) {
-    b.wobble += b.wobbleSpeed;
-    b.x += b.vx + Math.sin(b.wobble) * 0.4;
-    b.y += b.vy;
-  }
-  for (let i = balloons.length - 1; i >= 0; i--) {
-    if (balloons[i].y < -80) balloons.splice(i, 1);
+  if (gamePhase === "playing") {
+    spawnAcc += dt;
+    while (spawnAcc >= SPAWN_INTERVAL_MS) {
+      spawnAcc -= SPAWN_INTERVAL_MS;
+      spawnBalloon();
+    }
+    for (const b of balloons) {
+      b.wobble += b.wobbleSpeed;
+      b.x += b.vx + Math.sin(b.wobble) * 0.4;
+      b.y += b.vy;
+    }
+    for (let i = balloons.length - 1; i >= 0; i--) {
+      if (balloons[i].y < -80) balloons.splice(i, 1);
+    }
   }
 
   updateParticles(dt);
 
   drawBackground();
-  for (const b of balloons) drawBalloon(b);
-  drawParticles();
-  drawCrosshair();
 
+  if (gamePhase === "playing") {
+    for (const b of balloons) drawBalloon(b);
+    drawParticles();
+    drawShotFx();
+    drawCrosshair();
+  } else if (gamePhase === "calib") {
+    drawCalibTarget();
+    if (aimRaw.visible) {
+      drawCrosshairAt(aimRaw.x, aimRaw.y, "rgba(255, 190, 100, 0.9)", "rgba(255, 140, 60, 0.25)");
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+function startLoop() {
+  if (rafStarted) return;
+  rafStarted = true;
+  lastT = performance.now();
   requestAnimationFrame(frame);
 }
 
 overlayStart.addEventListener("click", async () => {
   overlayStart.disabled = true;
-  hintEl.textContent = "Загрузка модели распознавания руки…";
+  hintEl.textContent = "Загрузка модели…";
   try {
     await initHandLandmarker();
     await startCamera();
     overlay.classList.remove("visible");
-    hintEl.textContent = "Указательный палец — прицел. Щипок — выстрел.";
-    requestAnimationFrame(frame);
+    gamePhase = "calib";
+    showCalib();
+    hintEl.textContent = "Калибровка: наведите указательный палец на три круга по очереди.";
+    startLoop();
   } catch (e) {
     console.error(e);
     hintEl.textContent =
-      "Не удалось запустить камеру или модель. Проверьте разрешения и попробуйте Chrome по HTTPS или localhost.";
+      "Не удалось запустить камеру или модель. Проверьте разрешения и HTTPS / localhost.";
     overlayStart.disabled = false;
   }
 });
 
+calibCapture.addEventListener("click", () => {
+  if (gamePhase !== "calib") return;
+  if (sampleBuffer.length < CALIB_MIN_FRAMES) {
+    calibProgress.textContent = `Мало кадров (${sampleBuffer.length}). Держите руку в кадре и наведите палец на круг.`;
+    return;
+  }
+  const avg = averageBuffer(sampleBuffer);
+  if (!avg) return;
+  const step = calibSteps[calibStep];
+  const screen = { x: step.fx * window.innerWidth, y: step.fy * window.innerHeight };
+  calibSamples.push({ screen, raw: { x: avg.x, y: avg.y } });
+  sampleBuffer = [];
+  calibStep += 1;
+  if (calibStep >= calibSteps.length) {
+    finalizeCalibration();
+    gamePhase = "playing";
+    pinchPrev = false;
+    hideCalib();
+    hintEl.textContent = "Прицел — указательный. Выстрел — большой + безымянный палец. Пробел — выстрел.";
+    scoreEl.textContent = String(score);
+  } else {
+    syncCalibPanel();
+  }
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && aim.visible) {
+  if (e.code === "Space" && gamePhase === "playing" && aim.visible) {
     e.preventDefault();
     tryShoot();
   }

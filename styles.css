@@ -149,3 +149,29 @@ button:hover {
 button:active {
   transform: translateY(0);
 }
+
+.calib-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding: max(12px, env(safe-area-inset-top)) 20px 12px;
+  display: flex;
+  justify-content: center;
+  z-index: 11;
+  pointer-events: none;
+}
+
+.calib-panel .calib-card {
+  pointer-events: auto;
+  max-width: min(440px, 100%);
+  margin: 0;
+}
+
+.calib-card h2 {
+  font-family: "Unbounded", system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 1.2rem;
+  margin: 0 0 10px;
+  color: var(--accent2);
+}
