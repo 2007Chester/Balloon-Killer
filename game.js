@@ -387,8 +387,12 @@ function drawBackground() {
 
 /**
  * Точка прицела: смесь TIP + DIP + PIP.
- * X/Y в координатах кадра MediaPipe без зеркала по X — иначе прицел уезжает в противоположную сторону.
+ * X: как в кадре (ix).
+ * Y по умолчанию без зеркала: y = iy * высота (как в кадре MediaPipe, вниз = вниз).
+ * Если вертикаль наоборот — добавьте в URL ?flipY=1 (будет (1−iy)*высота).
  */
+const AIM_FLIP_Y = new URLSearchParams(location.search).get("flipY") === "1";
+
 function rawIndexPixels(lm) {
   const t = lm[LM.INDEX_TIP];
   const d = lm[LM.INDEX_DIP];
@@ -398,9 +402,10 @@ function rawIndexPixels(lm) {
   const wP = 0.16;
   const ix = wT * t.x + wD * d.x + wP * p.x;
   const iy = wT * t.y + wD * d.y + wP * p.y;
+  const ny = AIM_FLIP_Y ? 1 - iy : iy;
   return {
     x: ix * window.innerWidth,
-    y: iy * window.innerHeight,
+    y: ny * window.innerHeight,
   };
 }
 
